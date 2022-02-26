@@ -1,0 +1,23 @@
+CREATE CONSTRAINT ON (p:Provider) ASSERT p.from_npi IS UNIQUE;
+CREATE CONSTRAINT ON (h:Hospital) ASSERT h.to_npi IS UNIQUE;
+CREATE CONSTRAINT ON (t:Taxonomy) ASSERT t.taxonomy_code_provider IS UNIQUE;
+
+:auto USING PERIODIC COMMIT
+LOAD CSV WITH HEADERS
+FROM 'file:///full_refs.csv' AS line
+WITH line
+
+MERGE (p:Provider {npi: line.from_npi,
+                   name: COALESCE(line.name, "Full Name Missing")})
+MERGE (h:Hospital {npi: line.to_npi,
+                   organization: line.organization_hospital})
+MERGE (t:Taxonomy {taxonomy_code: line.taxonomy_code_provider,
+                   classification: line.classification_provider,
+                   specialization: COALESCE(line.specialization_provider, "None")})
+
+CREATE (p)-[:REFERRED_TO {referral_id: toInteger(line.referral_id),
+                          patient_count: toInteger(line.patient_count),
+                          transaction_count: toInteger(line.transaction_count),
+                          avg_day_wait: toFloat(line.average_day_wait),
+                          std_day_wait: toFloat(line.std_day_wait)}]->(h)
+CREATE (p)-[:SPECIALIZES_IN]->(t)
