@@ -1,3 +1,5 @@
+-- hopteam db
+
 CREATE CONSTRAINT ON (p:Provider) ASSERT p.from_npi IS UNIQUE;
 CREATE CONSTRAINT ON (h:Hospital) ASSERT h.to_npi IS UNIQUE;
 CREATE CONSTRAINT ON (t:Taxonomy) ASSERT t.taxonomy_code_provider IS UNIQUE;
@@ -21,3 +23,91 @@ CREATE (p)-[:REFERRED_TO {referral_id: toInteger(line.referral_id),
                           avg_day_wait: toFloat(line.average_day_wait),
                           std_day_wait: toFloat(line.std_day_wait)}]->(h)
 CREATE (p)-[:SPECIALIZES_IN]->(t)
+
+-- hospteam db
+
+CREATE CONSTRAINT ON (p:Provider) ASSERT p.from_npi IS UNIQUE;
+CREATE CONSTRAINT ON (h:Hospital) ASSERT h.to_npi IS UNIQUE;
+CREATE CONSTRAINT ON (t:Taxonomy) ASSERT t.taxonomy_code_provider IS UNIQUE;
+
+:auto USING PERIODIC COMMIT
+LOAD CSV WITH HEADERS
+FROM 'file:///hosp_geo.csv' AS line
+WITH line
+
+MERGE (p:Provider {npi: line.from_npi,
+                   name: COALESCE(line.name, "Full Name Missing"),
+                   address: line.address_provider})
+MERGE (h:Hospital {npi: line.to_npi,
+                   organization: line.organization_hospital,
+                   address: line.address_hospital})
+MERGE (t:Taxonomy {taxonomy_code: line.taxonomy_code_provider,
+                   classification: line.classification_provider,
+                   specialization: COALESCE(line.specialization_provider, "None")})
+
+CREATE (p)-[:REFERRED_TO {referral_id: toInteger(line.referral_id),
+                          patient_count: toInteger(line.patient_count),
+                          transaction_count: toInteger(line.transaction_count),
+                          avg_day_wait: toFloat(line.average_day_wait),
+                          std_day_wait: toFloat(line.std_day_wait),
+                          distance_miles: toInteger(line.distance_miles)}]->(h)
+CREATE (p)-[:SPECIALIZES_IN]->(t)
+
+-- preparing to apply the algorithm
+
+CALL gds.graph.create(
+'hospteam',
+'*',
+{
+REFERRED_TO: {
+orientation: 'UNDIRECTED',
+aggregation: 'SUM'
+}
+},
+{
+relationshipProperties: 'patient_count'
+}
+)
+
+
+-- applying the algorithm
+
+CALL gds.louvain.stream('hospteam', { relationshipWeightProperty: 'patient_count' })
+YIELD nodeId, communityId
+RETURN gds.util.asNode(nodeId).npi AS npi, gds.util.asNode(nodeId).name AS name, gds.util.asNode(nodeId).organization AS organization, communityId
+ORDER BY organization ASC
+
+-- update hospteam with community nodes and PART_OF relationship
+CREATE CONSTRAINT ON (c:Community) ASSERT c.id IS UNIQUE;
+
+:auto USING PERIODIC COMMIT
+LOAD CSV WITH HEADERS
+FROM 'file:///hosp_simple_communities_trimmed.csv' AS line
+WITH line
+
+MERGE (c:Community {id: line.communityId});
+
+:auto USING PERIODIC COMMIT
+LOAD CSV WITH HEADERS
+FROM 'file:///hosp_simple_communities_trimmed.csv' AS line
+WITH line
+
+MATCH (p:Provider {npi:line.npi}), (c:Community {npi:line.npi})
+CREATE (p) -[:PART_OF]-> (c)
+
+MATCH (h:Hospital {npi:line.npi}), (c:Community {npi:line.npi})
+CREATE (h) -[:PART_OF]-> (c);
+
+-- update communityId properties
+:auto USING PERIODIC COMMIT
+LOAD CSV WITH HEADERS
+FROM 'file:///hosp_simple_communities_trimmed.csv' AS line
+WITH line
+
+MERGE (p:Provider {npi:line.npi})
+ON MATCH SET p.communityId = line.communityId
+
+MERGE (h:Hospital {npi:line.npi})
+ON MATCH SET h.communityId = line.communityId;
+
+-- create the PART_OF relationships
