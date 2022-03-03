@@ -87,27 +87,31 @@ WITH line
 
 MERGE (c:Community {id: line.communityId});
 
-:auto USING PERIODIC COMMIT
+-- update hospteam with communityId properties and Community nodes
 LOAD CSV WITH HEADERS
-FROM 'file:///hosp_simple_communities_trimmed.csv' AS line
-WITH line
+FROM 'file:///hosp_simple_coms.csv' AS line
 
-MATCH (p:Provider {npi:line.npi}), (c:Community {npi:line.npi})
-CREATE (p) -[:PART_OF]-> (c)
+MERGE (n:Hospital {npi: toString(toInteger(line.npi))})
+ON MATCH SET n.communityId = line.communityId;
 
-MATCH (h:Hospital {npi:line.npi}), (c:Community {npi:line.npi})
-CREATE (h) -[:PART_OF]-> (c);
-
--- update communityId properties
-:auto USING PERIODIC COMMIT
 LOAD CSV WITH HEADERS
-FROM 'file:///hosp_simple_communities_trimmed.csv' AS line
-WITH line
+FROM 'file:///prov_simple_coms.csv' AS line
 
-MERGE (p:Provider {npi:line.npi})
-ON MATCH SET p.communityId = line.communityId
-
-MERGE (h:Hospital {npi:line.npi})
-ON MATCH SET h.communityId = line.communityId;
+MERGE (n:Provider {npi: toString(toInteger(line.npi))})
+ON MATCH SET n.communityId = line.communityId;
 
 -- create the PART_OF relationships
+
+MATCH
+  (h:Hospital),
+  (c:Community)
+WHERE h.communityId = c.communityId
+CREATE (h)-[r:PART_OF]->(c)
+RETURN h, c
+
+MATCH
+  (p:Provider),
+  (c:Community)
+WHERE p.communityId = c.communityId
+CREATE (p)-[r:PART_OF]->(c)
+RETURN p, c;
